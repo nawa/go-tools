@@ -38,9 +38,9 @@ var importToGroup = []func(env *ProcessEnv, importPath string) (num int, ok bool
 		if env.LocalPrefix == "" {
 			return
 		}
-		for _, p := range strings.Split(env.LocalPrefix, ",") {
+		for i, p := range strings.Split(env.LocalPrefix, ",") {
 			if strings.HasPrefix(importPath, p) || strings.TrimSuffix(p, "/") == importPath {
-				return 3, true
+				return 3 + i, true
 			}
 		}
 		return

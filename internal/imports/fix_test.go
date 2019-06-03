@@ -515,7 +515,6 @@ c = fmt.Printf
 
 import (
 	"fmt"
-
 	"gu"
 
 	"manypackages.com/packagea"
@@ -606,15 +605,11 @@ var _, _, _, _, _ = fmt.Errorf, io.Copy, strings.Contains, renamed_packagea.A, B
 
 import (
 	"fmt"
-
-	renamed_packagea "manypackages.com/packagea"
-
 	"io"
-
-	. "manypackages.com/packageb"
-
 	"strings"
 
+	renamed_packagea "manypackages.com/packagea"
+	. "manypackages.com/packageb"
 	_ "manypackages.com/packagec"
 )
 
@@ -1116,6 +1111,69 @@ import "math/rand"
 var _, _ = rand.Read, rand.NewZipf
 `,
 	},
+
+	{
+		name: "local_large",
+		in: `package pkg
+
+import (
+	"gopkg.in/gorp.v1"
+
+	a1 "local.com/X/Y/A"
+
+	"bytes"
+
+	"github.com/lib/pq"
+	"other-repo.by/X/Y"
+
+
+	"github.com/pkg/errors"
+	"fmt"
+	b "github.com/local/X/Y/B"
+
+	"project-local-package-1/X/Y/NotUsed"
+
+
+	nu "other-repo.by/X/NotUsed"
+
+	"github.com/local/X/Y/datastructures"
+	b1 "local.com/X/Y/B"
+	c "github.com/local/X/Y/C"
+	"database/sql"
+
+
+	"strconv"
+	a "github.com/local/X/Y/A"
+	"time"
+)
+
+var _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _ = bytes.Buffer{}, sql.Stmt{}, fmt.Sprint(), strconv.IntSize, time.February, pq.Error{}, errors.StackTrace{}, gorp.DbMap{}, Y.F, datastructures.F, a.F, b.F, c.F, a1.F, b1.F
+	`,
+		out: `package pkg
+
+import (
+	"bytes"
+	"database/sql"
+	"fmt"
+	"strconv"
+	"time"
+
+	"github.com/lib/pq"
+	"github.com/pkg/errors"
+	"gopkg.in/gorp.v1"
+	"other-repo.by/X/Y"
+
+	a1 "local.com/X/Y/A"
+	b1 "local.com/X/Y/B"
+
+	a "github.com/local/X/Y/A"
+	b "github.com/local/X/Y/B"
+	c "github.com/local/X/Y/C"
+	"github.com/local/X/Y/datastructures"
+)
+
+var _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _ = bytes.Buffer{}, sql.Stmt{}, fmt.Sprint(), strconv.IntSize, time.February, pq.Error{}, errors.StackTrace{}, gorp.DbMap{}, Y.F, datastructures.F, a.F, b.F, c.F, a1.F, b1.F
+`},
 }
 
 func TestSimpleCases(t *testing.T) {
@@ -1782,9 +1840,11 @@ const _ = runtime.GOOS
 import (
 	"runtime"
 
-	"code.org/r/p/expproj"
 	"example.org/pkg"
+
 	"foo.com/bar"
+
+	"code.org/r/p/expproj"
 )
 
 const X = pkg.A
