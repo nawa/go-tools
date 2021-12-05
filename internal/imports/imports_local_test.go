@@ -3,10 +3,10 @@ package imports
 import (
 	"bytes"
 	"fmt"
-	"go/build"
 	"math/rand"
 	"testing"
 	"time"
+	"golang.org/x/tools/internal/gocommand"
 )
 
 type importsLocalTestCase struct {
@@ -85,12 +85,10 @@ var _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _ = bytes.Buffer{}, sql.Stmt
 		Comments:  true,
 		Fragment:  true,
 		Env: &ProcessEnv{
-			GOPATH: build.Default.GOPATH,
-			GOROOT: build.Default.GOROOT,
+			GocmdRunner: &gocommand.Runner{},
 		},
+		LocalPrefix: "project-local-package-notexist,gitlab.internal.com,project-local-package-notexist2,project-local-package-2,project-local-package-1",
 	}
-
-	options.Env.LocalPrefix = "project-local-package-notexist,gitlab.internal.com,project-local-package-notexist2,project-local-package-2,project-local-package-1"
 
 	//-------------------
 

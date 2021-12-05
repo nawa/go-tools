@@ -1,21 +1,37 @@
 # Fork of `Go Tools` to tune `goimports` behavior
 
-This fork is created to fix next issues
+This fork has been created to fix the next issues
 
-- work with 3rd-party packages defined in `local` flag in more strict way
-	- if few packages are provided in `local`, the each group will be intended with new line
-	- groups ordering is the same as provided in `local`
-- ignore user defined empty lines between imports. It allows to receive more predictable ordering
+- ignore user-added empty lines between import records. It allows for a more predictable import section despite of different empty lines
+- work with 3rd-party packages defined in `-local` flag in a more strict way
+    - if multiple packages are provided in `-local` then each group will be intended with a new line
+    - groups ordering is the same as provided in `-local`
 
-## Download/Install
+It isn't intended to merge `github.com/golang/tools` back but free to install and use 
+
+## Download/Install/Use
 
 ```bash
-$ git clone github.com/nawa/go-tools
+$ git clone https://github.com/nawa/go-tools.git
 $ cd go-tools/cmd/goimports
 $ go install
 ```
 
-## Comparison with standard `goimports`
+or with additional build info provided in `-ldflags`
+
+```bash
+$ git clone https://github.com/nawa/go-tools.git
+$ cd go-tools/cmd/goimports
+$ go install -ldflags "-X main.buildInfo=commit:`git rev-parse --short HEAD`;date:`date -r $(git log -1 --format=%ct) '+%Y-%m-%d_%H:%M'`"
+```
+
+and use it
+
+```bash
+$ goimports -local="gitlab.internal.com/,internal-package/"
+```
+
+## Comparison with original `goimports`
 
 The next command is used
 
@@ -54,7 +70,7 @@ import (
 var _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _ = bytes.Buffer{}, sql.Stmt{}, fmt.Sprint(), strconv.IntSize, time.February, pq.Error{}, errors.StackTrace{}, gorp.DbMap{}, Y.F, datastructures.F, a.F, b.F, c.F, a1.F, b1.F, A.F, B.F
 ```
 
-Standard `goimports`:
+Original `goimports`:
 
 ```go
 package pkg
@@ -116,7 +132,7 @@ import (
 var _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _ = bytes.Buffer{}, sql.Stmt{}, fmt.Sprint(), strconv.IntSize, time.February, pq.Error{}, errors.StackTrace{}, gorp.DbMap{}, Y.F, datastructures.F, a.F, b.F, c.F, a1.F, b1.F, A.F, B.F
 ```
 
-### Comparison of ignoring user defined empty lines
+### Comparison of ignoring user added empty lines
 
 Input:
 
@@ -160,7 +176,7 @@ import (
 var _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _ = bytes.Buffer{}, sql.Stmt{}, fmt.Sprint(), strconv.IntSize, time.February, pq.Error{}, errors.StackTrace{}, gorp.DbMap{}, Y.F, datastructures.F, a.F, b.F, c.F, a1.F, b1.F, A.F, B.F
 ```
 
-Standard `goimports`:
+Original `goimports`:
 
 ```go
 package pkg
