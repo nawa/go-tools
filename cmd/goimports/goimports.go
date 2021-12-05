@@ -26,6 +26,7 @@ import (
 )
 
 var (
+	buildInfo = "N/A"
 	// main operation modes
 	list   = flag.Bool("l", false, "list files whose formatting differs from goimport's")
 	write  = flag.Bool("w", false, "write result to (source) file instead of stdout")
@@ -62,6 +63,7 @@ func report(err error) {
 }
 
 func usage() {
+	fmt.Fprintf(os.Stderr, "======= goimports FORK https://github.com/nawa/go-tools (%s) =======\n\n", buildInfo)
 	fmt.Fprintf(os.Stderr, "usage: goimports [flags] [path ...]\n")
 	flag.PrintDefaults()
 	os.Exit(2)
