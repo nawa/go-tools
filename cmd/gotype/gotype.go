@@ -167,7 +167,8 @@ files to include for such packages.
 `
 
 func usage() {
-	fmt.Fprintln(os.Stderr, usageString)
+	fmt.Fprint(os.Stderr, usageString)
+	fmt.Fprintln(os.Stderr)
 	flag.PrintDefaults()
 	os.Exit(2)
 }
@@ -284,7 +285,7 @@ func checkPkgFiles(files []*ast.File) {
 			}
 			report(err)
 		},
-		Importer: importer.For(*compiler, nil),
+		Importer: importer.ForCompiler(fset, *compiler, nil),
 		Sizes:    SizesFor(build.Default.Compiler, build.Default.GOARCH),
 	}
 

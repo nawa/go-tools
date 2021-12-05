@@ -4,6 +4,7 @@
 
 // Incomplete source tree on Android.
 
+//go:build !android
 // +build !android
 
 package ssa_test
@@ -15,29 +16,18 @@ package ssa_test
 
 import (
 	"go/ast"
-	"go/build"
 	"go/token"
 	"runtime"
 	"testing"
 	"time"
 
-	"golang.org/x/tools/go/buildutil"
-	"golang.org/x/tools/go/loader"
+	"golang.org/x/tools/go/ast/inspector"
+	"golang.org/x/tools/go/packages"
 	"golang.org/x/tools/go/ssa"
 	"golang.org/x/tools/go/ssa/ssautil"
+	"golang.org/x/tools/internal/testenv"
+	"golang.org/x/tools/internal/typeparams/genericfeatures"
 )
-
-// Skip the set of packages that transitively depend on
-// cmd/internal/objfile, which uses vendoring,
-// which go/loader does not yet support.
-// TODO(adonovan): add support for vendoring and delete this.
-var skip = map[string]bool{
-	"cmd/addr2line":        true,
-	"cmd/internal/objfile": true,
-	"cmd/nm":               true,
-	"cmd/objdump":          true,
-	"cmd/pprof":            true,
-}
 
 func bytesAllocated() uint64 {
 	runtime.GC()
@@ -50,25 +40,33 @@ func TestStdlib(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping in short mode; too slow (https://golang.org/issue/14113)")
 	}
+	testenv.NeedsTool(t, "go")
+
 	// Load, parse and type-check the program.
 	t0 := time.Now()
 	alloc0 := bytesAllocated()
 
-	// Load, parse and type-check the program.
-	ctxt := build.Default // copy
-	ctxt.GOPATH = ""      // disable GOPATH
-	conf := loader.Config{Build: &ctxt}
-	for _, path := range buildutil.AllPackages(conf.Build) {
-		if skip[path] {
+	cfg := &packages.Config{Mode: packages.LoadSyntax}
+	pkgs, err := packages.Load(cfg, "std", "cmd")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var nonGeneric int
+	for i := 0; i < len(pkgs); i++ {
+		pkg := pkgs[i]
+		inspect := inspector.New(pkg.Syntax)
+		features := genericfeatures.ForPackage(inspect, pkg.TypesInfo)
+		// Skip standard library packages that use generics. This won't be
+		// sufficient if any standard library packages start _importing_ packages
+		// that use generics.
+		if features != 0 {
+			t.Logf("skipping package %q which uses generics", pkg.PkgPath)
 			continue
 		}
-		conf.ImportWithTests(path)
+		pkgs[nonGeneric] = pkg
+		nonGeneric++
 	}
-
-	iprog, err := conf.Load()
-	if err != nil {
-		t.Fatalf("Load failed: %v", err)
-	}
+	pkgs = pkgs[:nonGeneric]
 
 	t1 := time.Now()
 	alloc1 := bytesAllocated()
@@ -78,7 +76,7 @@ func TestStdlib(t *testing.T) {
 	// Comment out these lines during benchmarking.  Approx SSA build costs are noted.
 	mode |= ssa.SanityCheckFunctions // + 2% space, + 4% time
 	mode |= ssa.GlobalDebug          // +30% space, +18% time
-	prog := ssautil.CreateProgram(iprog, mode)
+	prog, _ := ssautil.Packages(pkgs, mode)
 
 	t2 := time.Now()
 
@@ -93,8 +91,8 @@ func TestStdlib(t *testing.T) {
 		t.Errorf("Loaded only %d packages, want at least %d", numPkgs, want)
 	}
 
-	// Keep iprog reachable until after we've measured memory usage.
-	if len(iprog.AllPackages) == 0 {
+	// Keep pkgs reachable until after we've measured memory usage.
+	if len(pkgs) == 0 {
 		panic("unreachable")
 	}
 
