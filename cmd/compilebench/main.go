@@ -1,4 +1,4 @@
-// Copyright 2015 The Go Authors.  All rights reserved.
+// Copyright 2015 The Go Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
@@ -82,10 +82,10 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	exec "golang.org/x/sys/execabs"
 	"io/ioutil"
 	"log"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strconv"
@@ -139,7 +139,9 @@ var tests = []test{
 	{"BenchmarkReflect", compile{"reflect"}},
 	{"BenchmarkTar", compile{"archive/tar"}},
 	{"BenchmarkXML", compile{"encoding/xml"}},
-	{"BenchmarkLinkCompiler", link{"cmd/compile"}},
+	{"BenchmarkLinkCompiler", link{"cmd/compile", ""}},
+	{"BenchmarkExternalLinkCompiler", link{"cmd/compile", "-linkmode=external"}},
+	{"BenchmarkLinkWithoutDebugCompiler", link{"cmd/compile", "-w"}},
 	{"BenchmarkStdCmd", goBuild{[]string{"std", "cmd"}}},
 	{"BenchmarkHelloSize", size{"$GOROOT/test/helloworld.go", false}},
 	{"BenchmarkCmdGoSize", size{"cmd/go", true}},
@@ -200,7 +202,7 @@ func main() {
 	if *flagPackage != "" {
 		tests = []test{
 			{"BenchmarkPkg", compile{*flagPackage}},
-			{"BenchmarkPkgLink", link{*flagPackage}},
+			{"BenchmarkPkgLink", link{*flagPackage, ""}},
 		}
 		runRE = nil
 	}
@@ -244,7 +246,7 @@ func goList(dir string) (*Pkg, error) {
 	var pkg Pkg
 	out, err := exec.Command(*flagGoCmd, "list", "-json", dir).Output()
 	if err != nil {
-		return nil, fmt.Errorf("go list -json %s: %v\n", dir, err)
+		return nil, fmt.Errorf("go list -json %s: %v", dir, err)
 	}
 	if err := json.Unmarshal(out, &pkg); err != nil {
 		return nil, fmt.Errorf("go list -json %s: unmarshal: %v", dir, err)
@@ -361,7 +363,7 @@ func (c compile) run(name string, count int) error {
 	return nil
 }
 
-type link struct{ dir string }
+type link struct{ dir, flags string }
 
 func (link) long() bool { return false }
 
@@ -397,6 +399,7 @@ func (r link) run(name string, count int) error {
 	// Link the main package.
 	args = []string{"-o", "_compilebench_.exe"}
 	args = append(args, strings.Fields(*flagLinkerFlags)...)
+	args = append(args, strings.Fields(r.flags)...)
 	args = append(args, "_compilebench_.o")
 	if err := runBuildCmd(name, count, pkg.Dir, linker, args); err != nil {
 		return err
@@ -437,8 +440,8 @@ func runBuildCmd(name string, count int, dir, tool string, args []string) error 
 	}
 	end := time.Now()
 
-	haveAllocs := false
-	var allocs, allocbytes int64
+	haveAllocs, haveRSS := false, false
+	var allocs, allocbytes, rssbytes int64
 	if *flagAlloc || *flagMemprofile != "" {
 		out, err := ioutil.ReadFile(dir + "/_compilebench_.memprof")
 		if err != nil {
@@ -459,6 +462,9 @@ func runBuildCmd(name string, count int, dir, tool string, args []string) error 
 				allocbytes = val
 			case "Mallocs":
 				allocs = val
+			case "MaxRSS":
+				haveRSS = true
+				rssbytes = val
 			}
 		}
 		if !haveAllocs {
@@ -498,6 +504,9 @@ func runBuildCmd(name string, count int, dir, tool string, args []string) error 
 	fmt.Printf("%s 1 %d ns/op %d user-ns/op", name, wallns, userns)
 	if haveAllocs {
 		fmt.Printf(" %d B/op %d allocs/op", allocbytes, allocs)
+	}
+	if haveRSS {
+		fmt.Printf(" %d maxRSS/op", rssbytes)
 	}
 
 	return nil

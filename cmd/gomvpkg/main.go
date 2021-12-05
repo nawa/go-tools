@@ -1,6 +1,6 @@
 // Copyright 2015 The Go Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style
-// licence that can be found in the LICENSE file.
+// license that can be found in the LICENSE file.
 
 // The gomvpkg command moves go packages, updating import declarations.
 // See the -help message or Usage constant for details.
@@ -83,7 +83,7 @@ func main() {
 	}
 
 	if *helpFlag || *fromFlag == "" || *toFlag == "" {
-		fmt.Println(Usage)
+		fmt.Print(Usage)
 		return
 	}
 

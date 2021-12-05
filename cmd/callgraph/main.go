@@ -63,7 +63,7 @@ func init() {
 	flag.Var((*buildutil.TagsFlag)(&build.Default.BuildTags), "tags", buildutil.TagsFlagDoc)
 }
 
-const Usage = `callgraph: display the the call graph of a Go program.
+const Usage = `callgraph: display the call graph of a Go program.
 
 Usage:
 
@@ -166,7 +166,7 @@ var stdout io.Writer = os.Stdout
 
 func doCallgraph(dir, gopath, algo, format string, tests bool, args []string) error {
 	if len(args) == 0 {
-		fmt.Fprintln(os.Stderr, Usage)
+		fmt.Fprint(os.Stderr, Usage)
 		return nil
 	}
 

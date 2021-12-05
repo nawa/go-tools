@@ -1,15 +1,13 @@
-// Copyright 2013 The Go Authors.  All rights reserved.
+// Copyright 2013 The Go Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
 package main_test
 
 import (
-	"bufio"
 	"bytes"
 	"fmt"
 	"go/build"
-	"io"
 	"io/ioutil"
 	"net"
 	"net/http"
@@ -21,6 +19,9 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"golang.org/x/tools/go/packages/packagestest"
+	"golang.org/x/tools/internal/testenv"
 )
 
 // buildGodoc builds the godoc executable.
@@ -29,12 +30,15 @@ import (
 // TODO(adonovan): opt: do this at most once, and do the cleanup
 // exactly once.  How though?  There's no atexit.
 func buildGodoc(t *testing.T) (bin string, cleanup func()) {
+	t.Helper()
+
 	if runtime.GOARCH == "arm" {
 		t.Skip("skipping test on arm platforms; too slow")
 	}
 	if runtime.GOOS == "android" {
 		t.Skipf("the dependencies are not available on android")
 	}
+	testenv.NeedsTool(t, "go")
 
 	tmp, err := ioutil.TempDir("", "godoc-regtest-")
 	if err != nil {
@@ -70,56 +74,77 @@ func serverAddress(t *testing.T) string {
 	return ln.Addr().String()
 }
 
-func waitForServerReady(t *testing.T, addr string) {
-	waitForServer(t,
+func waitForServerReady(t *testing.T, cmd *exec.Cmd, addr string) {
+	ch := make(chan error, 1)
+	go func() { ch <- fmt.Errorf("server exited early: %v", cmd.Wait()) }()
+	go waitForServer(t, ch,
 		fmt.Sprintf("http://%v/", addr),
-		"The Go Programming Language",
+		"Go Documentation Server",
 		15*time.Second,
 		false)
+	if err := <-ch; err != nil {
+		t.Fatal(err)
+	}
 }
 
-func waitForSearchReady(t *testing.T, addr string) {
-	waitForServer(t,
+func waitForSearchReady(t *testing.T, cmd *exec.Cmd, addr string) {
+	ch := make(chan error, 1)
+	go func() { ch <- fmt.Errorf("server exited early: %v", cmd.Wait()) }()
+	go waitForServer(t, ch,
 		fmt.Sprintf("http://%v/search?q=FALLTHROUGH", addr),
 		"The list of tokens.",
 		2*time.Minute,
 		false)
+	if err := <-ch; err != nil {
+		t.Fatal(err)
+	}
 }
 
 func waitUntilScanComplete(t *testing.T, addr string) {
-	waitForServer(t,
+	ch := make(chan error)
+	go waitForServer(t, ch,
 		fmt.Sprintf("http://%v/pkg", addr),
 		"Scan is not yet complete",
 		2*time.Minute,
+		// setting reverse as true, which means this waits
+		// until the string is not returned in the response anymore
 		true,
 	)
-	// setting reverse as true, which means this waits
-	// until the string is not returned in the response anymore
+	if err := <-ch; err != nil {
+		t.Fatal(err)
+	}
 }
 
 const pollInterval = 200 * time.Millisecond
 
-func waitForServer(t *testing.T, url, match string, timeout time.Duration, reverse bool) {
-	// "health check" duplicated from x/tools/cmd/tipgodoc/tip.go
+// waitForServer waits for server to meet the required condition.
+// It sends a single error value to ch, unless the test has failed.
+// The error value is nil if the required condition was met within
+// timeout, or non-nil otherwise.
+func waitForServer(t *testing.T, ch chan<- error, url, match string, timeout time.Duration, reverse bool) {
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
 		time.Sleep(pollInterval)
+		if t.Failed() {
+			return
+		}
 		res, err := http.Get(url)
 		if err != nil {
 			continue
 		}
-		rbody, err := ioutil.ReadAll(res.Body)
+		body, err := ioutil.ReadAll(res.Body)
 		res.Body.Close()
-		if err == nil && res.StatusCode == http.StatusOK {
-			if bytes.Contains(rbody, []byte(match)) && !reverse {
-				return
-			}
-			if !bytes.Contains(rbody, []byte(match)) && reverse {
-				return
-			}
+		if err != nil || res.StatusCode != http.StatusOK {
+			continue
+		}
+		switch {
+		case !reverse && bytes.Contains(body, []byte(match)),
+			reverse && !bytes.Contains(body, []byte(match)):
+			ch <- nil
+			return
 		}
 	}
-	t.Fatalf("Server failed to respond in %v", timeout)
+	ch <- fmt.Errorf("server failed to respond in %v", timeout)
 }
 
 // hasTag checks whether a given release tag is contained in the current version
@@ -135,7 +160,7 @@ func hasTag(t string) bool {
 
 func killAndWait(cmd *exec.Cmd) {
 	cmd.Process.Kill()
-	cmd.Wait()
+	cmd.Process.Wait()
 }
 
 func TestURL(t *testing.T) {
@@ -155,12 +180,12 @@ func TestURL(t *testing.T) {
 			cmd.Stderr = stderr
 			cmd.Args[0] = "godoc"
 
-			// Set GOPATH variable to non-existing path
+			// Set GOPATH variable to a non-existing absolute path
 			// and GOPROXY=off to disable module fetches.
 			// We cannot just unset GOPATH variable because godoc would default it to ~/go.
 			// (We don't want the indexer looking at the local workspace during tests.)
 			cmd.Env = append(os.Environ(),
-				"GOPATH=does_not_exist",
+				"GOPATH=/does_not_exist",
 				"GOPROXY=off",
 				"GO111MODULE=off")
 
@@ -174,13 +199,19 @@ func TestURL(t *testing.T) {
 		}
 	}
 
-	t.Run("index", testcase("/", "Go is an open source programming language"))
+	t.Run("index", testcase("/", "These packages are part of the Go Project but outside the main Go tree."))
 	t.Run("fmt", testcase("/pkg/fmt", "Package fmt implements formatted I/O"))
 }
 
 // Basic integration test for godoc HTTP interface.
 func TestWeb(t *testing.T) {
-	testWeb(t, false)
+	bin, cleanup := buildGodoc(t)
+	defer cleanup()
+	for _, x := range packagestest.All {
+		t.Run(x.Name(), func(t *testing.T) {
+			testWeb(t, x, bin, false)
+		})
+	}
 }
 
 // Basic integration test for godoc HTTP interface.
@@ -188,34 +219,49 @@ func TestWebIndex(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping test in -short mode")
 	}
-	testWeb(t, true)
+	bin, cleanup := buildGodoc(t)
+	defer cleanup()
+	testWeb(t, packagestest.GOPATH, bin, true)
 }
 
 // Basic integration test for godoc HTTP interface.
-func testWeb(t *testing.T, withIndex bool) {
+func testWeb(t *testing.T, x packagestest.Exporter, bin string, withIndex bool) {
 	if runtime.GOOS == "plan9" {
 		t.Skip("skipping on plan9; fails to start up quickly enough")
 	}
-	bin, cleanup := buildGodoc(t)
-	defer cleanup()
+
+	// Write a fake GOROOT/GOPATH with some third party packages.
+	e := packagestest.Export(t, x, []packagestest.Module{
+		{
+			Name: "godoc.test/repo1",
+			Files: map[string]interface{}{
+				"a/a.go": `// Package a is a package in godoc.test/repo1.
+package a; import _ "godoc.test/repo2/a"; const Name = "repo1a"`,
+				"b/b.go": `package b; const Name = "repo1b"`,
+			},
+		},
+		{
+			Name: "godoc.test/repo2",
+			Files: map[string]interface{}{
+				"a/a.go": `package a; const Name = "repo2a"`,
+				"b/b.go": `package b; const Name = "repo2b"`,
+			},
+		},
+	})
+	defer e.Cleanup()
+
+	// Start the server.
 	addr := serverAddress(t)
 	args := []string{fmt.Sprintf("-http=%s", addr)}
 	if withIndex {
 		args = append(args, "-index", "-index_interval=-1s")
 	}
 	cmd := exec.Command(bin, args...)
+	cmd.Dir = e.Config.Dir
+	cmd.Env = e.Config.Env
 	cmd.Stdout = os.Stderr
 	cmd.Stderr = os.Stderr
 	cmd.Args[0] = "godoc"
-
-	// Set GOPATH variable to non-existing path
-	// and GOPROXY=off to disable module fetches.
-	// We cannot just unset GOPATH variable because godoc would default it to ~/go.
-	// (We don't want the indexer looking at the local workspace during tests.)
-	cmd.Env = append(os.Environ(),
-		"GOPATH=does_not_exist",
-		"GOPROXY=off",
-		"GO111MODULE=off")
 
 	if err := cmd.Start(); err != nil {
 		t.Fatalf("failed to start godoc: %s", err)
@@ -223,9 +269,9 @@ func testWeb(t *testing.T, withIndex bool) {
 	defer killAndWait(cmd)
 
 	if withIndex {
-		waitForSearchReady(t, addr)
+		waitForSearchReady(t, cmd, addr)
 	} else {
-		waitForServerReady(t, addr)
+		waitForServerReady(t, cmd, addr)
 		waitUntilScanComplete(t, addr)
 	}
 
@@ -238,8 +284,12 @@ func testWeb(t *testing.T, withIndex bool) {
 		releaseTag  string // optional release tag that must be in go/build.ReleaseTags
 	}{
 		{
-			path:     "/",
-			contains: []string{"Go is an open source programming language"},
+			path: "/",
+			contains: []string{
+				"Go Documentation Server",
+				"Standard library",
+				"These packages are part of the Go Project but outside the main Go tree.",
+			},
 		},
 		{
 			path:     "/pkg/fmt/",
@@ -258,6 +308,8 @@ func testWeb(t *testing.T, withIndex bool) {
 			contains: []string{
 				"Standard library",
 				"Package fmt implements formatted I/O",
+				"Third party",
+				"Package a is a package in godoc.test/repo1.",
 			},
 			notContains: []string{
 				"internal/syscall",
@@ -333,6 +385,16 @@ func testWeb(t *testing.T, withIndex bool) {
 			},
 			releaseTag: "go1.11",
 		},
+
+		// Third party packages.
+		{
+			path:     "/pkg/godoc.test/repo1/a",
+			contains: []string{`const <span id="Name">Name</span> = &#34;repo1a&#34;`},
+		},
+		{
+			path:     "/pkg/godoc.test/repo2/b",
+			contains: []string{`const <span id="Name">Name</span> = &#34;repo2b&#34;`},
+		},
 	}
 	for _, test := range tests {
 		if test.needIndex && !withIndex {
@@ -384,125 +446,34 @@ func testWeb(t *testing.T, withIndex bool) {
 	}
 }
 
-// Basic integration test for godoc -analysis=type (via HTTP interface).
-func TestTypeAnalysis(t *testing.T) {
+// Test for golang.org/issue/35476.
+func TestNoMainModule(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping test in -short mode")
+	}
 	if runtime.GOOS == "plan9" {
-		t.Skip("skipping test on plan9 (issue #11974)") // see comment re: Plan 9 below
+		t.Skip("skipping on plan9; for consistency with other tests that build godoc binary")
 	}
-
-	// Write a fake GOROOT/GOPATH.
-	tmpdir, err := ioutil.TempDir("", "godoc-analysis")
-	if err != nil {
-		t.Fatalf("ioutil.TempDir failed: %s", err)
-	}
-	defer os.RemoveAll(tmpdir)
-	for _, f := range []struct{ file, content string }{
-		{"goroot/src/lib/lib.go", `
-package lib
-type T struct{}
-const C = 3
-var V T
-func (T) F() int { return C }
-`},
-		{"gopath/src/app/main.go", `
-package main
-import "lib"
-func main() { print(lib.V) }
-`},
-	} {
-		file := filepath.Join(tmpdir, f.file)
-		if err := os.MkdirAll(filepath.Dir(file), 0755); err != nil {
-			t.Fatalf("MkdirAll(%s) failed: %s", filepath.Dir(file), err)
-		}
-		if err := ioutil.WriteFile(file, []byte(f.content), 0644); err != nil {
-			t.Fatal(err)
-		}
-	}
-
-	// Start the server.
 	bin, cleanup := buildGodoc(t)
 	defer cleanup()
-	addr := serverAddress(t)
-	cmd := exec.Command(bin, fmt.Sprintf("-http=%s", addr), "-analysis=type")
-	cmd.Env = os.Environ()
-	cmd.Env = append(cmd.Env, fmt.Sprintf("GOROOT=%s", filepath.Join(tmpdir, "goroot")))
-	cmd.Env = append(cmd.Env, fmt.Sprintf("GOPATH=%s", filepath.Join(tmpdir, "gopath")))
-	cmd.Env = append(cmd.Env, "GO111MODULE=off")
-	cmd.Env = append(cmd.Env, "GOPROXY=off")
-	cmd.Stdout = os.Stderr
-	stderr, err := cmd.StderrPipe()
+	tempDir, err := ioutil.TempDir("", "godoc-test-")
 	if err != nil {
 		t.Fatal(err)
 	}
-	cmd.Args[0] = "godoc"
-	if err := cmd.Start(); err != nil {
-		t.Fatalf("failed to start godoc: %s", err)
+	defer os.RemoveAll(tempDir)
+
+	// Run godoc in an empty directory with module mode explicitly on,
+	// so that 'go env GOMOD' reports os.DevNull.
+	cmd := exec.Command(bin, "-url=/")
+	cmd.Dir = tempDir
+	cmd.Env = append(os.Environ(), "GO111MODULE=on")
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	err = cmd.Run()
+	if err != nil {
+		t.Fatalf("godoc command failed: %v\nstderr=%q", err, stderr.String())
 	}
-	defer killAndWait(cmd)
-	waitForServerReady(t, addr)
-
-	// Wait for type analysis to complete.
-	reader := bufio.NewReader(stderr)
-	for {
-		s, err := reader.ReadString('\n') // on Plan 9 this fails
-		if err != nil {
-			t.Fatal(err)
-		}
-		fmt.Fprint(os.Stderr, s)
-		if strings.Contains(s, "Type analysis complete.") {
-			break
-		}
-	}
-	go io.Copy(os.Stderr, reader)
-
-	t0 := time.Now()
-
-	// Make an HTTP request and check for a regular expression match.
-	// The patterns are very crude checks that basic type information
-	// has been annotated onto the source view.
-tryagain:
-	for _, test := range []struct{ url, pattern string }{
-		{"/src/lib/lib.go", "L2.*package .*Package docs for lib.*/lib"},
-		{"/src/lib/lib.go", "L3.*type .*type info for T.*struct"},
-		{"/src/lib/lib.go", "L5.*var V .*type T struct"},
-		{"/src/lib/lib.go", "L6.*func .*type T struct.*T.*return .*const C untyped int.*C"},
-
-		{"/src/app/main.go", "L2.*package .*Package docs for app"},
-		{"/src/app/main.go", "L3.*import .*Package docs for lib.*lib"},
-		{"/src/app/main.go", "L4.*func main.*package lib.*lib.*var lib.V lib.T.*V"},
-	} {
-		url := fmt.Sprintf("http://%s%s", addr, test.url)
-		resp, err := http.Get(url)
-		if err != nil {
-			t.Errorf("GET %s failed: %s", url, err)
-			continue
-		}
-		body, err := ioutil.ReadAll(resp.Body)
-		resp.Body.Close()
-		if err != nil {
-			t.Errorf("GET %s: failed to read body: %s (response: %v)", url, err, resp)
-			continue
-		}
-
-		if !bytes.Contains(body, []byte("Static analysis features")) {
-			// Type analysis results usually become available within
-			// ~4ms after godoc startup (for this input on my machine).
-			if elapsed := time.Since(t0); elapsed > 500*time.Millisecond {
-				t.Fatalf("type analysis results still unavailable after %s", elapsed)
-			}
-			time.Sleep(10 * time.Millisecond)
-			goto tryagain
-		}
-
-		match, err := regexp.Match(test.pattern, body)
-		if err != nil {
-			t.Errorf("regexp.Match(%q) failed: %s", test.pattern, err)
-			continue
-		}
-		if !match {
-			// This is a really ugly failure message.
-			t.Errorf("GET %s: body doesn't match %q, got:\n%s",
-				url, test.pattern, string(body))
-		}
+	if strings.Contains(stderr.String(), "go mod download") {
+		t.Errorf("stderr contains 'go mod download', is that intentional?\nstderr=%q", stderr.String())
 	}
 }
